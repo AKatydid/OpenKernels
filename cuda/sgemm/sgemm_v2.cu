@@ -4,7 +4,9 @@
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
 
-#define OFFSET(row, col, ld) ((row * ld) + (col))
+#define OFFSET(row, col, ld) (((row) * ld) + (col))
+#define FLOAT4(pointer) (reinterpret_cast<float4*>(&(pointer))[0])
+
 #define checkCudaErrors(func)   \
 {							    \
     cudaError_t e = (func);	    \
@@ -12,43 +14,60 @@
         printf ("%s %d CUDA: %s\n", __FILE__,  __LINE__, cudaGetErrorString(e));    \
 }
 
-/*
-    SGEMM: C = αAB + βC
-*/
-void cpuSgemm(
-    float* a, float* b, float* c,
-    const int M,
-    const int N,
-    const int K,
-    const float alpha = 1.0f,
-    const float beta = 0.0f
-){
-    for (int m = 0; m < M; ++m){
-        for (int n = 0; n < N; ++n){
-            float col = 0.0f;
-            for (int k = 0; k < K; ++k){
-                col += a[OFFSET(m, k, K)] * b[OFFSET(k, n, N)];
-            }
-            c[OFFSET(m, n, N)] = alpha * col + beta * c[OFFSET(m, n, N)];
-        }
-    }
-}
-
 /**
- * Naive SGEMM
+ * SGEMM Shared Mem V2: Every thread calculates (TM, TN)
  */
-__global__ void naiveSgemmkernel(float* __restrict__ a, float* __restrict__ b, float* __restrict__ c,
+template<const int BM, const int BN, const int BK, const int TM, const int TN>
+__global__ void sgemmKernelV2(float* __restrict__ a, float* __restrict__ b, float* __restrict__ c,
     const int M, const int N, const int K, const float alpha, const float beta
 ){
-    int m = blockIdx.x * blockDim.x + threadIdx.x;
-    int n = blockIdx.y * blockDim.y + threadIdx.y;
-    
-    if (m < M && n < N){
-        float sum = 0.0f;
-        for (int k = 0; k < K; ++k){
-            sum += a[OFFSET(m, k, K)] * b[OFFSET(k, n, N)];
+    int tid = threadIdx.y * blockDim.x + threadIdx.x;
+
+    int load_a_smem_m = tid / (BK / 4);           // tid / 2
+    int load_a_smem_k = (tid % (BK / 4)) * 4;     // (tid % 2 == 0) ? 0 : 4
+    int load_b_smem_k = tid >> 5;                 // tid / 32
+    int load_b_smem_n = (tid & 31) << 2;          // (tid % 32) * 4
+
+    int load_a_gmem_m = blockIdx.y * BM + load_a_smem_m;
+    int load_b_gmem_n = blockIdx.x * BN + load_b_smem_n;
+
+    float tileSum[TM][TN] = {0.0};
+    __shared__ float sa[BM][BK];
+    __shared__ float sb[BK][BN];
+
+    int nIter = (K + BK - 1) / BK;
+    for (int bk = 0; bk < nIter; ++bk){
+        int load_a_gmem_k = bk * BK + load_a_smem_k;
+        FLOAT4(sa[load_a_smem_m][load_a_smem_k]) = FLOAT4(a[OFFSET(load_a_gmem_m, load_a_gmem_k, K)]);
+        int load_b_gmem_k = bk * BK + load_b_smem_k;
+        FLOAT4(sb[load_b_smem_k][load_b_smem_n]) = FLOAT4(b[OFFSET(load_b_gmem_k, load_b_gmem_n, N)]);
+
+        __syncthreads();
+
+        #pragma unroll
+        for (int k = 0; k < BK; ++k){
+            #pragma unroll
+            for (int tm = 0; tm < TM; ++tm){
+                #pragma unroll
+                for (int tn = 0; tn < TN; ++tn){
+                    tileSum[tm][tn] += sa[threadIdx.y * TM + tm][k] * sb[k][threadIdx.x * TN + tn];
+                }
+            }
         }
-        c[OFFSET(m, n, N)] = alpha * sum + beta * c[OFFSET(m, n, N)];
+
+        __syncthreads();
+    }
+
+    // write back to global mem
+    #pragma unroll
+    for (int i = 0; i < TM; i++) {
+        int store_c_gmem_m = blockIdx.y * BM + threadIdx.y * TM + i;
+        #pragma unroll
+        for (int j = 0; j < TN; j += 4) {
+            int store_c_gmem_n = blockIdx.x * BN + threadIdx.x * TN + j;
+            int store_c_gmem_addr = OFFSET(store_c_gmem_m, store_c_gmem_n, N);
+            FLOAT4(c[store_c_gmem_addr]) = FLOAT4(tileSum[i][j]);
+        }
     }
 }
 
@@ -88,19 +107,27 @@ int main(int argc, char** argv){
     checkCudaErrors(cudaMemcpy(d_C, h_C, bytes_C, cudaMemcpyHostToDevice));
 
     float msec = 0;
-    int warmup = 25;
-    int nIter = 500;
+    float flop = 2 * M * N * K;
+    int warmup = 10;
+    int nIter = 200;
     
-    dim3 block(32, 32);
-    dim3 grid((N + block.x - 1) / block.x, (M + block.y - 1) / block.y);
+    const int BM = 128;
+    const int BN = 128;
+    const int BK = 8;
+    const int TM = 8;
+    const int TN = 8;
+    dim3 block = dim3(BN / TN, BM / TM);
+    dim3 grid = dim3((N + BN - 1) / BN, (M + BM - 1) / BM);
 
     // warmup
-    for (int i = 0; i < warmup; i++){
-        float alpha = 1.0;
-        float beta = 0;
-        naiveSgemmkernel<<<grid, block>>>(d_A, d_B, d_C, M, N, K, alpha, beta);
-    }
+    // for (int i = 0; i < warmup; i++){
+    //     float alpha = 1.0;
+    //     float beta = 0;
+    //     sgemmKernelV2<BM, BN, BK, TM, TN><<<grid, block>>>(d_A, d_B, d_C, M, N, K, alpha, beta);
+    // }
 
+    float alpha = 1.0;
+    float beta = 0;
     cudaEvent_t start, stop;
     checkCudaErrors(cudaEventCreate(&start));
     checkCudaErrors(cudaEventCreate(&stop));
@@ -110,21 +137,21 @@ int main(int argc, char** argv){
     for (int i = 0; i < nIter; i++){
         float alpha = 1.0;
         float beta = 0;
-        naiveSgemmkernel<<<grid, block>>>(d_A, d_B, d_C, M, N, K, alpha, beta);
+        sgemmKernelV2<BM, BN, BK, TM, TN><<<grid, block>>>(d_A, d_B, d_C, M, N, K, alpha, beta);
     }
 
     checkCudaErrors(cudaEventRecord(stop));
     checkCudaErrors(cudaEventSynchronize(stop));
     checkCudaErrors(cudaEventElapsedTime(&msec, start, stop));
-    printf("Elapsed time (My SGEMM): %.2f ms\n", msec);
+    printf("Elapsed time (My SGEMM): %.2f ms / %.4f giga flops\n", msec, flop * 1e-9f / (msec * 1e-3f / nIter));
 
     checkCudaErrors(cudaMemcpy(h_C, d_C, bytes_C, cudaMemcpyDeviceToHost));
 
     // cublas
     cublasHandle_t blas_handle;
     cublasCreate(&blas_handle);
-    float alpha = 1.0;
-    float beta = 0;
+    alpha = 1.0;
+    beta = 0;
     checkCudaErrors(cudaMemcpy( d_C, h_C, bytes_C, cudaMemcpyHostToDevice));
     checkCudaErrors(cudaEventSynchronize(start));
     checkCudaErrors(cudaEventRecord(start));
@@ -137,7 +164,7 @@ int main(int argc, char** argv){
     checkCudaErrors(cudaEventRecord(stop));
     checkCudaErrors(cudaEventSynchronize(stop));
     checkCudaErrors(cudaEventElapsedTime(&msec, start, stop));
-    printf("Elapsed time (cuBLAS): %.2f ms\n", msec);
+    printf("Elapsed time (cuBLAS): %.2f ms / %.4f giga flops\n", msec, flop * 1e-9f / (msec * 1e-3f / nIter));
 
     checkCudaErrors(cudaMemcpy(h_C_ref, d_C, bytes_C, cudaMemcpyDeviceToHost));
 

@@ -10,7 +10,7 @@ torch.set_grad_enabled(False)
 # Load the CUDA kernel as a python module
 lib = load(
     name="sgemv_lib",
-    sources=["sgemv_new.cu"],
+    sources=["sgemv.cu"],
     extra_cuda_cflags=[
         "-O3",
         "-U__CUDA_NO_HALF_OPERATORS__",
