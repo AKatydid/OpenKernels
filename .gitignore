@@ -6,3 +6,9 @@
 *.fatbin
 .vscode
 **/build/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.cache/
+.codex
