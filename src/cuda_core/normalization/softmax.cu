@@ -6,9 +6,9 @@
 #include <float.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <torch/extension.h>
-#include <torch/types.h>
+#include <stdexcept>
 #include <vector>
+
 
 #define WARP_SIZE 32
 #define INT4(value) (reinterpret_cast<int4 *>(&(value))[0])
@@ -408,47 +408,11 @@ online_safe_softmax_f32x4_pack_per_token_kernel(float *x, float *y, int N) {
   }
 }
 
-#define STRINGFY(str) #str
-#define TORCH_BINDING_COMMON_EXTENSION(func)                                   \
-  m.def(STRINGFY(func), &func, STRINGFY(func));
-
-#define CHECK_TORCH_TENSOR_DTYPE(T, th_type)                                   \
-  if (((T).options().dtype() != (th_type))) {                                  \
-    std::cout << "Tensor Info:" << (T).options() << std::endl;                 \
-    throw std::runtime_error("values must be " #th_type);                      \
-  }
-
-#define CHECK_TORCH_TENSOR_SHAPE(T1, T2)                                       \
-  assert((T1).dim() == (T2).dim());                                            \
-  for (int i = 0; i < (T1).dim(); ++i) {                                       \
-    if ((T2).size(i) != (T1).size(i)) {                                        \
-      throw std::runtime_error("Tensor size mismatch!");                       \
-    }                                                                          \
-  }
-
-// grid memory fence
-#define TORCH_BINDING_SOFTMAX(packed_type, th_type, element_type, n_elements)  \
-  void softmax_##packed_type(torch::Tensor x, torch::Tensor y) {               \
-    CHECK_TORCH_TENSOR_DTYPE(x, (th_type))                                     \
-    CHECK_TORCH_TENSOR_DTYPE(y, (th_type))                                     \
-    auto options =                                                             \
-        torch::TensorOptions().dtype((th_type)).device(torch::kCUDA, 0);       \
-    const int N = x.size(0);                                                   \
-    CHECK_TORCH_TENSOR_SHAPE(x, y)                                             \
-    auto total = torch::zeros({1}, options);                                   \
-    dim3 block(256);                                                           \
-    dim3 grid(((N + 256 - 1) / 256) / (n_elements));                           \
-    softmax_##packed_type##_kernel<256><<<grid, block>>>(                      \
-        reinterpret_cast<element_type *>(x.data_ptr()),                        \
-        reinterpret_cast<element_type *>(y.data_ptr()),                        \
-        reinterpret_cast<element_type *>(total.data_ptr()), N);                \
-  }
-
 // softmax per token
 #define LANUCH_SOFTMAX_F32_PER_TOKEN_KERNEL(H)                                 \
   softmax_f32_per_token_kernel<(H)>                                            \
-      <<<grid, block>>>(reinterpret_cast<float *>(x.data_ptr()),               \
-                        reinterpret_cast<float *>(y.data_ptr()), N);
+      <<<grid, block>>>(x,               \
+                        y, N);
 
 #define DISPATCH_SOFTMAX_F32_PER_TOKEN_KERNEL(S, H)                            \
   dim3 block((H));                                                             \
@@ -479,8 +443,8 @@ online_safe_softmax_f32x4_pack_per_token_kernel(float *x, float *y, int N) {
 
 #define LANUCH_SOFTMAX_F32x4_PER_TOKEN_KERNEL(H)                               \
   softmax_f32x4_per_token_kernel<(H) / 4>                                      \
-      <<<grid, block>>>(reinterpret_cast<float *>(x.data_ptr()),               \
-                        reinterpret_cast<float *>(y.data_ptr()), N);
+      <<<grid, block>>>(x,               \
+                        y, N);
 
 #define DISPATCH_SOFTMAX_F32x4_PER_TOKEN_KERNEL(S, H)                          \
   const int NT = (H) / 4;                                                      \
@@ -511,8 +475,8 @@ online_safe_softmax_f32x4_pack_per_token_kernel(float *x, float *y, int N) {
 // safe softmax per token
 #define LANUCH_SAFE_SOFTMAX_F32_PER_TOKEN_KERNEL(H)                            \
   safe_softmax_f32_per_token_kernel<(H)>                                       \
-      <<<grid, block>>>(reinterpret_cast<float *>(x.data_ptr()),               \
-                        reinterpret_cast<float *>(y.data_ptr()), N);
+      <<<grid, block>>>(x,               \
+                        y, N);
 
 #define DISPATCH_SATE_SOFTMAX_F32_PER_TOKEN_KERNEL(S, H)                       \
   dim3 block((H));                                                             \
@@ -544,8 +508,8 @@ online_safe_softmax_f32x4_pack_per_token_kernel(float *x, float *y, int N) {
 // online softmax per token
 #define LANUCH_ONLINE_SOFTMAX_F32_PER_TOKEN_KERNEL(H)                          \
   online_safe_softmax_f32_per_token_kernel<(H)>                                \
-      <<<grid, block>>>(reinterpret_cast<float *>(x.data_ptr()),               \
-                        reinterpret_cast<float *>(y.data_ptr()), N);
+      <<<grid, block>>>(x,               \
+                        y, N);
 
 #define DISPATCH_ONLINE_SOFTMAX_F32_PER_TOKEN_KERNEL(S, H)                     \
   dim3 block((H));                                                             \
@@ -577,8 +541,8 @@ online_safe_softmax_f32x4_pack_per_token_kernel(float *x, float *y, int N) {
 // online softmax per token
 #define LANUCH_ONLINE_SOFTMAX_F32X4_PACK_PER_TOKEN_KERNEL(H)                   \
   online_safe_softmax_f32x4_pack_per_token_kernel<(H / 4)>                     \
-      <<<grid, block>>>(reinterpret_cast<float *>(x.data_ptr()),               \
-                        reinterpret_cast<float *>(y.data_ptr()), N);
+      <<<grid, block>>>(x,               \
+                        y, N);
 
 #define DISPATCH_ONLINE_SOFTMAX_F32X4_PACK_PER_TOKEN_KERNEL(S, H)              \
   dim3 block((H / 4));                                                         \
@@ -609,8 +573,8 @@ online_safe_softmax_f32x4_pack_per_token_kernel(float *x, float *y, int N) {
 
 #define LANUCH_SAFE_SOFTMAX_F32x4_PER_TOKEN_KERNEL(H)                          \
   safe_softmax_f32x4_per_token_kernel<(H) / 4>                                 \
-      <<<grid, block>>>(reinterpret_cast<float *>(x.data_ptr()),               \
-                        reinterpret_cast<float *>(y.data_ptr()), N);
+      <<<grid, block>>>(x,               \
+                        y, N);
 
 #define DISPATCH_SATE_SOFTMAX_F32x4_PER_TOKEN_KERNEL(S, H)                     \
   const int NT = (H) / 4;                                                      \
@@ -640,8 +604,8 @@ online_safe_softmax_f32x4_pack_per_token_kernel(float *x, float *y, int N) {
 
 #define LANUCH_SAFE_SOFTMAX_F16_F32_PER_TOKEN_KERNEL(H)                        \
   safe_softmax_f16_f32_per_token_kernel<(H)>                                   \
-      <<<grid, block>>>(reinterpret_cast<half *>(x.data_ptr()),                \
-                        reinterpret_cast<half *>(y.data_ptr()), N);
+      <<<grid, block>>>(x,                \
+                        y, N);
 
 #define DISPATCH_SATE_SOFTMAX_F16_F32_PER_TOKEN_KERNEL(S, H)                   \
   dim3 block((H));                                                             \
@@ -672,8 +636,8 @@ online_safe_softmax_f32x4_pack_per_token_kernel(float *x, float *y, int N) {
 
 #define LANUCH_SAFE_SOFTMAX_F16x2_F32_PER_TOKEN_KERNEL(H)                      \
   safe_softmax_f16x2_f32_per_token_kernel<(H) / 2>                             \
-      <<<grid, block>>>(reinterpret_cast<half *>(x.data_ptr()),                \
-                        reinterpret_cast<half *>(y.data_ptr()), N);
+      <<<grid, block>>>(x,                \
+                        y, N);
 
 #define DISPATCH_SATE_SOFTMAX_F16x2_F32_PER_TOKEN_KERNEL(S, H)                 \
   const int NT = (H) / 2;                                                      \
@@ -701,8 +665,8 @@ online_safe_softmax_f32x4_pack_per_token_kernel(float *x, float *y, int N) {
 
 #define LANUCH_SAFE_SOFTMAX_F16x8_PACK_F32_PER_TOKEN_KERNEL(H)                 \
   safe_softmax_f16x8_pack_f32_per_token_kernel<(H) / 8>                        \
-      <<<grid, block>>>(reinterpret_cast<half *>(x.data_ptr()),                \
-                        reinterpret_cast<half *>(y.data_ptr()), N);
+      <<<grid, block>>>(x,                \
+                        y, N);
 
 #define DISPATCH_SATE_SOFTMAX_F16x8_PACK_F32_PER_TOKEN_KERNEL(S, H)            \
   const int NT = (H) / 8;                                                      \
@@ -733,112 +697,49 @@ online_safe_softmax_f32x4_pack_per_token_kernel(float *x, float *y, int N) {
   }
 
 // per token fp32
-void softmax_f32_per_token(torch::Tensor x, torch::Tensor y) {
-  CHECK_TORCH_TENSOR_DTYPE(x, torch::kFloat32)
-  CHECK_TORCH_TENSOR_DTYPE(y, torch::kFloat32)
-  CHECK_TORCH_TENSOR_SHAPE(x, y)
-  const int S = x.size(0); // seqlens
-  const int H = x.size(1); // head size/kv_len
+void softmax_f32_per_token(float *x, float *y, int S, int H) {
   const int N = S * H;
   DISPATCH_SOFTMAX_F32_PER_TOKEN_KERNEL(S, H)
 }
 
-void softmax_f32x4_per_token(torch::Tensor x, torch::Tensor y) {
-  CHECK_TORCH_TENSOR_DTYPE(x, torch::kFloat32)
-  CHECK_TORCH_TENSOR_DTYPE(y, torch::kFloat32)
-  CHECK_TORCH_TENSOR_SHAPE(x, y)
-  const int S = x.size(0); // seqlens
-  const int H = x.size(1); // head size/kv_len
+void softmax_f32x4_per_token(float *x, float *y, int S, int H) {
   const int N = S * H;
   DISPATCH_SOFTMAX_F32x4_PER_TOKEN_KERNEL(S, H)
 }
 
-void safe_softmax_f32_per_token(torch::Tensor x, torch::Tensor y) {
-  CHECK_TORCH_TENSOR_DTYPE(x, torch::kFloat32)
-  CHECK_TORCH_TENSOR_DTYPE(y, torch::kFloat32)
-  CHECK_TORCH_TENSOR_SHAPE(x, y)
-  const int S = x.size(0); // seqlens
-  const int H = x.size(1); // head size/kv_len
+void safe_softmax_f32_per_token(float *x, float *y, int S, int H) {
   const int N = S * H;
   DISPATCH_SATE_SOFTMAX_F32_PER_TOKEN_KERNEL(S, H)
 }
 
-void safe_softmax_f32x4_per_token(torch::Tensor x, torch::Tensor y) {
-  CHECK_TORCH_TENSOR_DTYPE(x, torch::kFloat32)
-  CHECK_TORCH_TENSOR_DTYPE(y, torch::kFloat32)
-  CHECK_TORCH_TENSOR_SHAPE(x, y)
-  const int S = x.size(0); // seqlens
-  const int H = x.size(1); // head size/kv_len
+void safe_softmax_f32x4_per_token(float *x, float *y, int S, int H) {
   const int N = S * H;
   DISPATCH_SATE_SOFTMAX_F32x4_PER_TOKEN_KERNEL(S, H)
 }
 
 // per token fp16
-void safe_softmax_f16_f32_per_token(torch::Tensor x, torch::Tensor y) {
-  CHECK_TORCH_TENSOR_DTYPE(x, torch::kHalf)
-  CHECK_TORCH_TENSOR_DTYPE(y, torch::kHalf)
-  CHECK_TORCH_TENSOR_SHAPE(x, y)
-  const int S = x.size(0); // seqlens
-  const int H = x.size(1); // head size/kv_len
+void safe_softmax_f16_f32_per_token(half *x, half *y, int S, int H) {
   const int N = S * H;
   DISPATCH_SATE_SOFTMAX_F16_F32_PER_TOKEN_KERNEL(S, H)
 }
 
-void safe_softmax_f16x2_f32_per_token(torch::Tensor x, torch::Tensor y) {
-  CHECK_TORCH_TENSOR_DTYPE(x, torch::kHalf)
-  CHECK_TORCH_TENSOR_DTYPE(y, torch::kHalf)
-  CHECK_TORCH_TENSOR_SHAPE(x, y)
-  const int S = x.size(0); // seqlens
-  const int H = x.size(1); // head size/kv_len
+void safe_softmax_f16x2_f32_per_token(half *x, half *y, int S, int H) {
   const int N = S * H;
   DISPATCH_SATE_SOFTMAX_F16x2_F32_PER_TOKEN_KERNEL(S, H)
 }
 
-void safe_softmax_f16x8_pack_f32_per_token(torch::Tensor x, torch::Tensor y) {
-  CHECK_TORCH_TENSOR_DTYPE(x, torch::kHalf)
-  CHECK_TORCH_TENSOR_DTYPE(y, torch::kHalf)
-  CHECK_TORCH_TENSOR_SHAPE(x, y)
-  const int S = x.size(0); // seqlens
-  const int H = x.size(1); // head size/kv_len
+void safe_softmax_f16x8_pack_f32_per_token(half *x, half *y, int S, int H) {
   const int N = S * H;
   DISPATCH_SATE_SOFTMAX_F16x8_PACK_F32_PER_TOKEN_KERNEL(S, H)
 }
 
-void online_safe_softmax_f32_per_token(torch::Tensor x, torch::Tensor y) {
-  CHECK_TORCH_TENSOR_DTYPE(x, torch::kFloat32)
-  CHECK_TORCH_TENSOR_DTYPE(y, torch::kFloat32)
-  CHECK_TORCH_TENSOR_SHAPE(x, y)
-  const int S = x.size(0); // seqlens
-  const int H = x.size(1); // head size/kv_len
+void online_safe_softmax_f32_per_token(float *x, float *y, int S, int H) {
   const int N = S * H;
   DISPATCH_ONLINE_SOFTMAX_F32_PER_TOKEN_KERNEL(S, H)
 }
 
-void online_safe_softmax_f32x4_pack_per_token(torch::Tensor x,
-                                              torch::Tensor y) {
-  CHECK_TORCH_TENSOR_DTYPE(x, torch::kFloat32)
-  CHECK_TORCH_TENSOR_DTYPE(y, torch::kFloat32)
-  CHECK_TORCH_TENSOR_SHAPE(x, y)
-  const int S = x.size(0);
-  const int H = x.size(1);
+void online_safe_softmax_f32x4_pack_per_token(float *x, float *y, int S,
+                                              int H) {
   const int N = S * H;
   DISPATCH_ONLINE_SOFTMAX_F32X4_PACK_PER_TOKEN_KERNEL(S, H)
-}
-
-// grid memory fence fp32
-// TORCH_BINDING_SOFTMAX(f32,   torch::kFloat32, float, 1)
-// TORCH_BINDING_SOFTMAX(f32x4, torch::kFloat32, float, 4)
-
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-  // TORCH_BINDING_COMMON_EXTENSION(softmax_f32)
-  // TORCH_BINDING_COMMON_EXTENSION(softmax_f32x4)
-  TORCH_BINDING_COMMON_EXTENSION(softmax_f32_per_token)
-  TORCH_BINDING_COMMON_EXTENSION(softmax_f32x4_per_token)
-  TORCH_BINDING_COMMON_EXTENSION(safe_softmax_f32_per_token)
-  TORCH_BINDING_COMMON_EXTENSION(safe_softmax_f32x4_per_token)
-  TORCH_BINDING_COMMON_EXTENSION(safe_softmax_f16_f32_per_token)
-  TORCH_BINDING_COMMON_EXTENSION(safe_softmax_f16x2_f32_per_token)
-  TORCH_BINDING_COMMON_EXTENSION(safe_softmax_f16x8_pack_f32_per_token)
-  TORCH_BINDING_COMMON_EXTENSION(online_safe_softmax_f32_per_token)
-  TORCH_BINDING_COMMON_EXTENSION(online_safe_softmax_f32x4_pack_per_token)
 }

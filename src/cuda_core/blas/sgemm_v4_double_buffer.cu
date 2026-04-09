@@ -22,12 +22,6 @@ __global__ void sgemmKernelV4(
     float * __restrict__ a, float * __restrict__ b, float * __restrict__ c,
     const int M, const int N, const int K, float alpha, float beta) {
 
-    const int BM = 128;
-    const int BN = 128;
-    const int BK = 8;
-    const int TM = 8;
-    const int TN = 8;
-
     const int bx = blockIdx.x;
     const int by = blockIdx.y;
     const int tx = threadIdx.x;

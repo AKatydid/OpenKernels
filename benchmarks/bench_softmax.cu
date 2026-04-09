@@ -693,6 +693,7 @@ int main(int argc, char **argv) {
     int B = 8;
     int T = 1024;
     int V = 50257;
+    int repeat_times = 100;
 
     int deviceIdx = 0;
     cudaCheck(cudaSetDevice(deviceIdx));
@@ -723,7 +724,20 @@ int main(int argc, char **argv) {
     if (argc > 1) {
         kernel_num = atoi(argv[1]);
     }
+    if (argc > 2) {
+        B = atoi(argv[2]);
+    }
+    if (argc > 3) {
+        T = atoi(argv[3]);
+    }
+    if (argc > 4) {
+        V = atoi(argv[4]);
+    }
+    if (argc > 5) {
+        repeat_times = atoi(argv[5]);
+    }
     printf("Using kernel %d\n", kernel_num);
+    printf("Shape: B=%d, T=%d, V=%d, repeat=%d\n", B, T, V, repeat_times);
 
     int block_sizes[] = {32, 64, 128, 256, 512, 1024};
 
@@ -751,7 +765,6 @@ int main(int argc, char **argv) {
     for (int j = 0; j < sizeof(block_sizes) / sizeof(int); j++) {
         int block_size = block_sizes[j];
 
-        int repeat_times = 100;
         float elapsed_time = benchmark_kernel(repeat_times, softmax_forward,
                                               kernel_num, d_out, d_inp, B * T, V, block_size
                                               );

@@ -6,8 +6,7 @@
 #include <float.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <torch/extension.h>
-#include <torch/types.h>
+#include <stdexcept>
 #include <vector>
 
 
@@ -187,81 +186,30 @@ __global__ void sgemv_splitk_smem_f32_kernel(const float * __restrict__ A,
     }
 }
 
-#define STRINGFY(str) #str
-#define TORCH_BINDING_COMMON_EXTENSION(func)                                   \
-  m.def(STRINGFY(func), &func, STRINGFY(func));
-
-#define CHECK_TORCH_TENSOR_DTYPE(T, th_type)                                   \
-  if (((T).options().dtype() != (th_type))) {                                  \
-    std::cout << "Tensor Info:" << (T).options() << std::endl;                 \
-    throw std::runtime_error("values must be " #th_type);                      \
+void sgemv_k32_f32(float *a, float *x, float *y, int M, int K) {
+  if (K % 32 != 0) {
+    throw std::runtime_error("K must be multiple of 32");
   }
-
-#define CHECK_TORCH_TENSOR_SHAPE(T, S0, S1)                                    \
-  if (((T).size(0) != (S0)) || ((T).size(1) != (S1))) {                        \
-    throw std::runtime_error("Tensor size mismatch!");                         \
-  }
-
-#define ASSERT_K_IS_MULTIBLE_OF(V)                                             \
-  if (K % (V) != 0) {                                                          \
-    throw std::runtime_error("K must be multiple of " #V);                     \
-  }
-
-#define ASSERT_K_IS_EQUAL_OF(V)                                                \
-  if (K != (V)) {                                                              \
-    throw std::runtime_error("K must be " #V);                                 \
-  }
-
-void sgemv_k32_f32(torch::Tensor a, torch::Tensor x, torch::Tensor y) {
-  CHECK_TORCH_TENSOR_DTYPE(a, torch::kFloat32)
-  CHECK_TORCH_TENSOR_DTYPE(x, torch::kFloat32)
-  CHECK_TORCH_TENSOR_DTYPE(y, torch::kFloat32)
-  const int M = a.size(0);
-  const int K = a.size(1);
-  CHECK_TORCH_TENSOR_SHAPE(a, M, K)
-  CHECK_TORCH_TENSOR_SHAPE(x, K, 1)
-  CHECK_TORCH_TENSOR_SHAPE(y, M, 1)
-  ASSERT_K_IS_MULTIBLE_OF(32)
-
   dim3 block(32, 4);
   dim3 grid((M + 4 - 1) / 4);
 
-  sgemv_k32_f32_kernel<<<grid, block>>>(reinterpret_cast<float *>(a.data_ptr()),
-                                        reinterpret_cast<float *>(x.data_ptr()),
-                                        reinterpret_cast<float *>(y.data_ptr()),
-                                        M, K);
+  sgemv_k32_f32_kernel<<<grid, block>>>(a, x, y, M, K);
 }
 
-void sgemv_k128_f32x4(torch::Tensor a, torch::Tensor x, torch::Tensor y) {
-  CHECK_TORCH_TENSOR_DTYPE(a, torch::kFloat32)
-  CHECK_TORCH_TENSOR_DTYPE(x, torch::kFloat32)
-  CHECK_TORCH_TENSOR_DTYPE(y, torch::kFloat32)
-  const int M = a.size(0);
-  const int K = a.size(1);
-  CHECK_TORCH_TENSOR_SHAPE(a, M, K)
-  CHECK_TORCH_TENSOR_SHAPE(x, K, 1)
-  CHECK_TORCH_TENSOR_SHAPE(y, M, 1)
-  ASSERT_K_IS_MULTIBLE_OF(128)
-
+void sgemv_k128_f32x4(float *a, float *x, float *y, int M, int K) {
+  if (K % 128 != 0) {
+    throw std::runtime_error("K must be multiple of 128");
+  }
   dim3 block(32, 4);
   dim3 grid((M + 4 - 1) / 4);
 
-  sgemv_k128_f32x4_kernel<<<grid, block>>>(
-      reinterpret_cast<float *>(a.data_ptr()),
-      reinterpret_cast<float *>(x.data_ptr()),
-      reinterpret_cast<float *>(y.data_ptr()), M, K);
+  sgemv_k128_f32x4_kernel<<<grid, block>>>(a, x, y, M, K);
 }
 
-void sgemv_k16_f32(torch::Tensor a, torch::Tensor x, torch::Tensor y) {
-  CHECK_TORCH_TENSOR_DTYPE(a, torch::kFloat32)
-  CHECK_TORCH_TENSOR_DTYPE(x, torch::kFloat32)
-  CHECK_TORCH_TENSOR_DTYPE(y, torch::kFloat32)
-  const int M = a.size(0);
-  const int K = a.size(1);
-  CHECK_TORCH_TENSOR_SHAPE(a, M, K)
-  CHECK_TORCH_TENSOR_SHAPE(x, K, 1)
-  CHECK_TORCH_TENSOR_SHAPE(y, M, 1)
-  ASSERT_K_IS_EQUAL_OF(16)
+void sgemv_k16_f32(float *a, float *x, float *y, int M, int K) {
+  if (K != 16) {
+    throw std::runtime_error("K must be 16");
+  }
 
   constexpr int NUM_THREADS = 128;
   constexpr int ROW_PER_WARP = 2;
@@ -272,22 +220,11 @@ void sgemv_k16_f32(torch::Tensor a, torch::Tensor x, torch::Tensor y) {
   dim3 grid((M + NUM_ROWS - 1) / NUM_ROWS);
 
   sgemv_k16_f32_kernel<ROW_PER_WARP>
-      <<<grid, block>>>(reinterpret_cast<float *>(a.data_ptr()),
-                        reinterpret_cast<float *>(x.data_ptr()),
-                        reinterpret_cast<float *>(y.data_ptr()), M, K);
+      <<<grid, block>>>(a, x, y, M, K);
 }
 
-void sgemv_splitk_f32(torch::Tensor a, torch::Tensor x, torch::Tensor y) {
-  CHECK_TORCH_TENSOR_DTYPE(a, torch::kFloat32)
-  CHECK_TORCH_TENSOR_DTYPE(x, torch::kFloat32)
-  CHECK_TORCH_TENSOR_DTYPE(y, torch::kFloat32)
-  const int M = a.size(0);
-  const int K = a.size(1);
-  CHECK_TORCH_TENSOR_SHAPE(a, M, K)
-  CHECK_TORCH_TENSOR_SHAPE(x, K, 1)
-  CHECK_TORCH_TENSOR_SHAPE(y, M, 1)
-
-  y.zero_();
+void sgemv_splitk_f32(float *a, float *x, float *y, int M, int K) {
+  cudaMemset(y, 0, sizeof(float) * M);
 
   const int BM = 4;
   const int BK = 32;
@@ -296,23 +233,12 @@ void sgemv_splitk_f32(torch::Tensor a, torch::Tensor x, torch::Tensor y) {
   dim3 grid((K + SPLIT_K -1) / SPLIT_K, (M + BM -1) / BM);
 
   sgemv_splitk_f32_kernel<BM, BK, SPLIT_K>
-      <<<grid, block>>>(reinterpret_cast<float *>(a.data_ptr()),
-                        reinterpret_cast<float *>(x.data_ptr()),
-                        reinterpret_cast<float *>(y.data_ptr()), M, K);
+      <<<grid, block>>>(a, x, y, M, K);
 
 }
 
-void sgemv_splitk_smem_f32(torch::Tensor a, torch::Tensor x, torch::Tensor y) {
-  CHECK_TORCH_TENSOR_DTYPE(a, torch::kFloat32)
-  CHECK_TORCH_TENSOR_DTYPE(x, torch::kFloat32)
-  CHECK_TORCH_TENSOR_DTYPE(y, torch::kFloat32)
-  const int M = a.size(0);
-  const int K = a.size(1);
-  CHECK_TORCH_TENSOR_SHAPE(a, M, K)
-  CHECK_TORCH_TENSOR_SHAPE(x, K, 1)
-  CHECK_TORCH_TENSOR_SHAPE(y, M, 1)
-
-  y.zero_();
+void sgemv_splitk_smem_f32(float *a, float *x, float *y, int M, int K) {
+  cudaMemset(y, 0, sizeof(float) * M);
 
   const int BM = 8;
   const int BK = 32;
@@ -322,15 +248,5 @@ void sgemv_splitk_smem_f32(torch::Tensor a, torch::Tensor x, torch::Tensor y) {
   size_t shared_mem_bytes = SPLIT_K * sizeof(float);
 
   sgemv_splitk_smem_f32_kernel<BM, BK, SPLIT_K>
-      <<<grid, block, shared_mem_bytes>>>(reinterpret_cast<float *>(a.data_ptr()),
-                        reinterpret_cast<float *>(x.data_ptr()),
-                        reinterpret_cast<float *>(y.data_ptr()), M, K);
-}
-
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-  TORCH_BINDING_COMMON_EXTENSION(sgemv_k32_f32)
-  TORCH_BINDING_COMMON_EXTENSION(sgemv_k128_f32x4)
-  TORCH_BINDING_COMMON_EXTENSION(sgemv_k16_f32)
-  TORCH_BINDING_COMMON_EXTENSION(sgemv_splitk_f32)
-  TORCH_BINDING_COMMON_EXTENSION(sgemv_splitk_smem_f32)
+      <<<grid, block, shared_mem_bytes>>>(a, x, y, M, K);
 }
