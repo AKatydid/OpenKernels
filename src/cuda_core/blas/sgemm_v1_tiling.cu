@@ -48,6 +48,7 @@ __global__ void sgemmKernelV1(float* __restrict__ a, float* __restrict__ b, floa
     }
 }
 
+#ifndef OPENKERNELS_DISABLE_MAIN
 int main(int argc, char** argv){
     if (argc != 4){
         printf("Usage: %s <M> <N> <K>\n", argv[0]);
@@ -167,3 +168,4 @@ int main(int argc, char** argv){
 
     return 0;
 }
+#endif  // OPENKERNELS_DISABLE_MAIN

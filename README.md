@@ -32,21 +32,16 @@ OpenKernels/
 │       └── cumsum.cu
 ├── tests/
 │   ├── CMakeLists.txt
-│   ├── test_sgemm.cu
-│   ├── test_softmax.cu
-│   ├── test_relu.cu
-│   ├── test_gelu.cu
-│   ├── test_rms_norm.cu
-│   ├── test_sgemv.cu
-│   └── test_cumsum.cu
-├── benchmarks/
-│   ├── CMakeLists.txt
-│   ├── bench_sgemm.cu
-│   ├── bench_softmax.cu
-│   └── common.h
+│   ├── cuda_core/
+│   │   ├── activation/
+│   │   ├── blas/
+│   │   ├── normalization/
+│   │   └── scan/
+│   ├── include/
+│   └── python/
 ├── scripts/
 │   ├── build.sh
-│   └── plot_performance.py
+│   └── run_tests.py
 └── tensor_core/
 ```
 
@@ -67,12 +62,11 @@ cmake --build build -j
 
 ```bash
 # correctness
-./build/tests/test_softmax
-./build/tests/test_sgemm 512 512 512
+./build/tests/test_softmax --verify
+./build/tests/test_sgemm --verify 256 256 256
 
-# performance
-./build/benchmarks/bench_sgemm 2048 2048 2048
-./build/benchmarks/bench_softmax 7 8 1024 50257 50
+# batch verify + benchmark
+python3 scripts/run_tests.py --build-dir build
 ```
 
 ## Notes

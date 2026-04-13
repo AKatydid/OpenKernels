@@ -1,25 +1,25 @@
-#include <algorithm>
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cuda_fp8.h>
 #include <cuda_runtime.h>
 #include <float.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <vector>
 
-#define WARP_SIZE 32
 #define MAX_EXP_F32 88.3762626647949f
 #define MIN_EXP_F32 -88.3762626647949f
 #define SQRT_2_PI (M_SQRT2 *M_2_SQRTPI * 0.5f)
 #define FLOAT4(ptr) (reinterpret_cast<float4*>(&(ptr))[0])
 
+/**
+ * GELU activation function:
+ *   raw: GELU(x) = x * 0.5 * (1.0 + erf(x * 1/sqrt(2)))
+ *   approximate: GELU(x) = 0.5 * x * (1.0 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+ */
+
 __inline__ __device__ float gelu_tanh_approximate(float x){
-  return 0.5f * x * (1.0f + tanhf(SQRT_2_PI * (x + 0.044715 * x * x *x)));
+  return 0.5f * x * (1.0f + tanhf(SQRT_2_PI * (x + 0.044715 * x * x * x)));
 }
 
-// block(256)
-// grid((N + 256 - 1) / 256)
+
 __global__ void gelu_f32_kernel(float* x, float* y, int N){
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if(idx < N){
@@ -28,9 +28,7 @@ __global__ void gelu_f32_kernel(float* x, float* y, int N){
   }
 }
 
-// BN = 256
-// block(256 / 4)
-// grid((N + 256 - 1) / 256)
+
 __global__ void gelu_f32x4_kernel(float* x, float* y, int N){
   int idx = (blockIdx.x * blockDim.x + threadIdx.x) * 4;
   float4 reg_x = FLOAT4(x[idx]);

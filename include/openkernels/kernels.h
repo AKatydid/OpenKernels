@@ -1,3 +1,6 @@
+#ifndef _OPENKERNELS_KERNELS_H_
+#define _OPENKERNELS_KERNELS_H_
+
 #pragma once
 
 #include <cstddef>
@@ -33,3 +36,5 @@ void online_safe_softmax_f32_per_token(float *x, float *y, int S, int H);
 void online_safe_softmax_f32x4_pack_per_token(float *x, float *y, int S, int H);
 
 void ScanThenFan(const int32_t *input, int32_t *buffer, int32_t *output, size_t n);
+
+#endif // _OPENKERNELS_KERNELS_H_

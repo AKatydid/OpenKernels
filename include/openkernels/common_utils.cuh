@@ -1,13 +1,14 @@
+#ifndef _OPENKERNELS_COMMON_CUDA_UTILS_CUH_
+#define _OPENKERNELS_COMMON_CUDA_UTILS_CUH_
+
 #pragma once
 
-#include <cuda_runtime.h>
-
-#include <cstddef>
-#include <cstdint>
 #include <iostream>
-#include <random>
+#include <cuda_runtime.h>
+#include <cublas_v2.h>
+#include <cublasLt.h>
 #include <stdexcept>
-#include <vector>
+
 
 #define CHECK_CUDA(cmd)                                                         \
   do {                                                                          \
@@ -17,69 +18,101 @@
     }                                                                           \
   } while (0)
 
-// Alias for consistency with common CUDA naming.
 #define CUDA_CHECK(cmd) CHECK_CUDA(cmd)
+#ifndef FLOAT4
+#define FLOAT4(ptr) (reinterpret_cast<float4 *>(&(ptr))[0])
+#endif
 
-class CudaTimer {
- public:
-  CudaTimer() {
-    CHECK_CUDA(cudaEventCreate(&start_));
-    CHECK_CUDA(cudaEventCreate(&stop_));
-  }
-
-  ~CudaTimer() {
-    cudaEventDestroy(start_);
-    cudaEventDestroy(stop_);
-  }
-
-  void start(cudaStream_t stream = 0) { CHECK_CUDA(cudaEventRecord(start_, stream)); }
-
-  float stop(cudaStream_t stream = 0) {
-    CHECK_CUDA(cudaEventRecord(stop_, stream));
-    CHECK_CUDA(cudaEventSynchronize(stop_));
-    float ms = 0.0f;
-    CHECK_CUDA(cudaEventElapsedTime(&ms, start_, stop_));
-    return ms;
-  }
-
- private:
-  cudaEvent_t start_ = nullptr;
-  cudaEvent_t stop_ = nullptr;
+void cuda_check(cudaError_t error, const char *file, int line) {
+    if (error != cudaSuccess) {
+        printf("[CUDA ERROR] at file %s:%d:\n%s\n", file, line,
+               cudaGetErrorString(error));
+        exit(EXIT_FAILURE);
+    }
 };
+#define cudaCheck(err) (cuda_check(err, __FILE__, __LINE__))
 
-inline std::vector<float> make_random_f32(size_t n, float lo = -1.0f,
-                                          float hi = 1.0f) {
-  std::mt19937 gen(42);
-  std::uniform_real_distribution<float> dist(lo, hi);
-  std::vector<float> v(n);
-  for (size_t i = 0; i < n; ++i) {
-    v[i] = dist(gen);
-  }
-  return v;
+
+template<class TargetType>
+[[nodiscard]] cudaError_t memcpy_convert(TargetType* d_ptr, float* h_ptr, size_t count) {
+    // copy from host to device with data type conversion.
+    TargetType* converted = (TargetType*)malloc(count * sizeof(TargetType));
+    for (int i = 0; i < count; i++) {
+        converted[i] = (TargetType)h_ptr[i];
+    }
+
+    cudaError_t status = cudaMemcpy(d_ptr, converted, count * sizeof(TargetType), cudaMemcpyHostToDevice);
+    free(converted);
+
+    // instead of checking the status at cudaMemcpy, we return it from here. This way, we
+    // still need to use our checking macro, and get better line info as to where the error
+    // happened.
+    return status;
 }
 
-inline std::vector<int32_t> make_random_i32(size_t n, int lo = 1, int hi = 4) {
-  std::mt19937 gen(42);
-  std::uniform_int_distribution<int32_t> dist(lo, hi);
-  std::vector<int32_t> v(n);
-  for (size_t i = 0; i < n; ++i) {
-    v[i] = dist(gen);
-  }
-  return v;
+template<class D, class T>
+void validate_result(D* device_result, const T* cpu_reference, const char* name, std::size_t num_elements, T tolerance=1e-4) {
+    D* out_gpu = (D*)malloc(num_elements * sizeof(D));
+    cudaCheck(cudaMemcpy(out_gpu, device_result, num_elements * sizeof(D), cudaMemcpyDeviceToHost));
+    int nfaults = 0;
+    for (int i = 0; i < num_elements; i++) {
+        // print the first few comparisons
+        if (i < 5) {
+            printf("%f %f\n", cpu_reference[i], (T)out_gpu[i]);
+        }
+        // ensure correctness for all elements. We can set an "ignore" mask by writing NaN
+        if (fabs(cpu_reference[i] - (T)out_gpu[i]) > tolerance && isfinite(cpu_reference[i])) {
+            printf("Mismatch of %s at %d: CPU_ref: %f vs GPU: %f\n", name, i, cpu_reference[i], (T)out_gpu[i]);
+            nfaults ++;
+            if (nfaults >= 10) {
+                free(out_gpu);
+                exit(EXIT_FAILURE);
+            }
+        }
+    }
+
+    // reset the result pointer, so we can chain multiple tests and don't miss trivial errors,
+    // like the kernel not writing to part of the result.
+    // cudaMemset(device_result, 0, num_elements * sizeof(T));
+    // AK: taking this out, ~2 hours of my life was spent finding this line
+
+    free(out_gpu);
 }
 
-inline void print_head(const char *tag, const std::vector<float> &v, int k = 4) {
-  std::cout << tag << ": ";
-  for (int i = 0; i < k && i < static_cast<int>(v.size()); ++i) {
-    std::cout << v[i] << (i + 1 == k ? "" : ", ");
-  }
-  std::cout << "\n";
+template<class Kernel, class... KernelArgs>
+float benchmark_kernel(int repeats, Kernel kernel, KernelArgs&&... kernel_args) {
+    cudaEvent_t start, stop;
+    // prepare buffer to scrub L2 cache between benchmarks
+    // just memset a large dummy array, recommended by
+    // https://stackoverflow.com/questions/31429377/how-can-i-clear-flush-the-l2-cache-and-the-tlb-of-a-gpu
+    // and apparently used in nvbench.
+    int deviceIdx = 0;
+    cudaCheck(cudaSetDevice(deviceIdx));
+    cudaDeviceProp deviceProp;
+    cudaCheck(cudaGetDeviceProperties(&deviceProp, deviceIdx));
+    void* flush_buffer;
+    cudaCheck(cudaMalloc(&flush_buffer, deviceProp.l2CacheSize));
+
+    cudaCheck(cudaEventCreate(&start));
+    cudaCheck(cudaEventCreate(&stop));
+    float elapsed_time = 0.f;
+    for (int i = 0; i < repeats; i++) {
+        // clear L2
+        cudaCheck(cudaMemset(flush_buffer, 0, deviceProp.l2CacheSize));
+        // now we can start recording the timing of the kernel
+        cudaCheck(cudaEventRecord(start, nullptr));
+        kernel(std::forward<KernelArgs>(kernel_args)...);
+        cudaCheck(cudaEventRecord(stop, nullptr));
+        cudaCheck(cudaEventSynchronize(start));
+        cudaCheck(cudaEventSynchronize(stop));
+        float single_call;
+        cudaCheck(cudaEventElapsedTime(&single_call, start, stop));
+        elapsed_time += single_call;
+    }
+
+    cudaCheck(cudaFree(flush_buffer));
+
+    return elapsed_time / repeats;
 }
 
-inline void print_head(const char *tag, const std::vector<int32_t> &v, int k = 8) {
-  std::cout << tag << ": ";
-  for (int i = 0; i < k && i < static_cast<int>(v.size()); ++i) {
-    std::cout << v[i] << (i + 1 == k ? "" : ", ");
-  }
-  std::cout << "\n";
-}
+#endif  // _OPENKERNELS_COMMON_CUDA_UTILS_CUH_

@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.21)
 project(OpenKernels LANGUAGES CXX CUDA)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD 17)
@@ -23,6 +25,6 @@ if(OPENKERNELS_BUILD_TESTS)
   add_subdirectory(tests)
 endif()
 
-if(OPENKERNELS_BUILD_BENCHMARKS)
+if(OPENKERNELS_BUILD_BENCHMARKS AND EXISTS "${PROJECT_SOURCE_DIR}/benchmarks/CMakeLists.txt")
   add_subdirectory(benchmarks)
 endif()
