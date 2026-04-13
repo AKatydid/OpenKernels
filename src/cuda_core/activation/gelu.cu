@@ -28,7 +28,6 @@ __global__ void gelu_f32_kernel(float* x, float* y, int N){
   }
 }
 
-
 __global__ void gelu_f32x4_kernel(float* x, float* y, int N){
   int idx = (blockIdx.x * blockDim.x + threadIdx.x) * 4;
   float4 reg_x = FLOAT4(x[idx]);
@@ -47,7 +46,6 @@ __global__ void gelu_f32x4_kernel(float* x, float* y, int N){
   if(idx + 0 < N) 
     FLOAT4(y[idx]) = reg_y;
 }
-
 
 void gelu_f32(float *x, float *y, int N) {
   dim3 block(256);
