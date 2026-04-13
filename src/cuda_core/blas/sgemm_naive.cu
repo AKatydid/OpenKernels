@@ -1,40 +1,4 @@
-#include<stdio.h>
-#include<stdlib.h>
-
-#include<cuda_runtime.h>
-#include<cublas_v2.h>
-
-#define OFFSET(row, col, ld) ((row) * ld + col)
-#define FLOAT4(pointer) (reinterpret_cast<float4*>(&(pointer))[0])
-#define checkCUDAError(func)    \
-{                               \
-    cudaError_t e = (func);     \
-    if (cudaSuccess != e){      \
-        printf("CUDA ERROR: %s at %d line, %s", __FILE__, __LINE__, cudaGetErrorString(e)); \
-    }                           \
-}                               \
-
-/**
- * C = αAB + βC, every thread calculates one element
- */
-__global__ void naiveSGEMM(
-    float* A, float* B, float* C, 
-    const int M, const int N, const int K, 
-    const float alpha, const float beta
-){
-    int row = blockIdx.y * blockDim.y + threadIdx.y;
-    int col = blockIdx.x * blockDim.x + threadIdx.x;
-
-    if (row < M && col < N){
-        float sum = 0.0;
-
-        for (int i = 0; i < K; ++i){
-            sum += A[OFFSET(row, i, K)] * B[OFFSET(i, col, N)];
-        }
-
-        C[OFFSET(row, col, N)] = alpha * sum + beta * C[OFFSET(row, col, N)];
-    }
-}
+#include "common_utils.cuh"
 
 /**
  * Optimized Version 1: Using shared mem and every thread calculates (TN, TM) elements
@@ -123,12 +87,12 @@ int main(int argc, char** argv){
     for (int i = 0; i < K * N; ++i) h_B[i] = rand() / (float)RAND_MAX;
     for (int i = 0; i < M * N; ++i) h_C[i] = rand() / (float)RAND_MAX;
 
-    checkCUDAError(cudaMalloc(&d_A, bytes_A));
-    checkCUDAError(cudaMalloc(&d_B, bytes_B));
-    checkCUDAError(cudaMalloc(&d_C, bytes_C));
-    checkCUDAError(cudaMemcpy(d_A, h_A, bytes_A, cudaMemcpyHostToDevice));
-    checkCUDAError(cudaMemcpy(d_B, h_B, bytes_B, cudaMemcpyHostToDevice));
-    checkCUDAError(cudaMemcpy(d_C, h_C, bytes_C, cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMalloc(&d_A, bytes_A));
+    CHECK_CUDA(cudaMalloc(&d_B, bytes_B));
+    CHECK_CUDA(cudaMalloc(&d_C, bytes_C));
+    CHECK_CUDA(cudaMemcpy(d_A, h_A, bytes_A, cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_B, h_B, bytes_B, cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_C, h_C, bytes_C, cudaMemcpyHostToDevice));
 
     float alpha = 1.0;
     float beta = 0.0;
@@ -144,22 +108,22 @@ int main(int argc, char** argv){
     
     float msec = 0;
     cudaEvent_t start, end;
-    checkCUDAError(cudaEventCreate(&start));
-    checkCUDAError(cudaEventCreate(&end));
-    checkCUDAError(cudaEventSynchronize(start));
-    checkCUDAError(cudaEventRecord(start));
+    CHECK_CUDA(cudaEventCreate(&start));
+    CHECK_CUDA(cudaEventCreate(&end));
+    CHECK_CUDA(cudaEventSynchronize(start));
+    CHECK_CUDA(cudaEventRecord(start));
     
     for (int i = 0; i < 10; ++i){
         // naiveSGEMM<<<grid, block>>>(d_A, d_B, d_C, M, N, K, alpha, beta);
         SGEMM_V1<BM, BN, BK, TM, TN><<<grid, block>>>(d_A, d_B, d_C, M, N, K, alpha, beta);
     }
 
-    checkCUDAError(cudaEventRecord(end));
-    checkCUDAError(cudaEventSynchronize(end));
-    checkCUDAError(cudaEventElapsedTime(&msec, start, end));
+    CHECK_CUDA(cudaEventRecord(end));
+    CHECK_CUDA(cudaEventSynchronize(end));
+    CHECK_CUDA(cudaEventElapsedTime(&msec, start, end));
     printf("Elapsed time (My SGEMM): %.2f ms / %.4f giga flops\n", msec, 2 * M * N * K * 1e-9f / (msec * 1e-3f / 10));
 
-    checkCUDAError(cudaMemcpy(h_C, d_C, bytes_C, cudaMemcpyDeviceToHost));
+    CHECK_CUDA(cudaMemcpy(h_C, d_C, bytes_C, cudaMemcpyDeviceToHost));
 
     // 验证
     cublasHandle_t blas_handle;
@@ -167,7 +131,7 @@ int main(int argc, char** argv){
 
     cublasSgemm_v2(blas_handle, CUBLAS_OP_T, CUBLAS_OP_T, M, N, K, &alpha, d_A, K, d_B, N, &beta, d_C, N);
 
-    checkCUDAError(cudaMemcpy(h_C_ref, d_C, bytes_C, cudaMemcpyDeviceToHost));
+    CHECK_CUDA(cudaMemcpy(h_C_ref, d_C, bytes_C, cudaMemcpyDeviceToHost));
     double eps = 1.e-6; 
     bool correct = true;
     for (int i = 0; i < M * N; i++) {

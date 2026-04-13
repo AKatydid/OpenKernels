@@ -1,18 +1,4 @@
-#include <stdio.h>
-#include <stdlib.h>
-
-#include <cuda_runtime.h>
-#include <cublas_v2.h>
-
-#define OFFSET(row, col, ld) (((row) * ld) + (col))
-#define FLOAT4(pointer) (reinterpret_cast<float4*>(&(pointer))[0])
-
-#define checkCudaErrors(func)   \
-{							    \
-    cudaError_t e = (func);	    \
-    if(e != cudaSuccess)	    \
-        printf ("%s %d CUDA: %s\n", __FILE__,  __LINE__, cudaGetErrorString(e));    \
-}
+#include "common_utils.cuh"
 
 /**
  * SGEMM Shared Mem
@@ -76,12 +62,12 @@ int main(int argc, char** argv){
     for (size_t i = 0; i < K * N; i++) h_B[i] = rand() / (float)RAND_MAX;
     for (size_t i = 0; i < M * N; i++) h_C[i] = rand() / (float)RAND_MAX;
 
-    checkCudaErrors(cudaMalloc(&d_A, bytes_A));
-    checkCudaErrors(cudaMalloc(&d_B, bytes_B));
-    checkCudaErrors(cudaMalloc(&d_C, bytes_C));
-    checkCudaErrors(cudaMemcpy(d_A, h_A, bytes_A, cudaMemcpyHostToDevice));
-    checkCudaErrors(cudaMemcpy(d_B, h_B, bytes_B, cudaMemcpyHostToDevice));
-    checkCudaErrors(cudaMemcpy(d_C, h_C, bytes_C, cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMalloc(&d_A, bytes_A));
+    CHECK_CUDA(cudaMalloc(&d_B, bytes_B));
+    CHECK_CUDA(cudaMalloc(&d_C, bytes_C));
+    CHECK_CUDA(cudaMemcpy(d_A, h_A, bytes_A, cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_B, h_B, bytes_B, cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_C, h_C, bytes_C, cudaMemcpyHostToDevice));
 
     float msec = 0;
     float flop = 2 * M * N * K;
@@ -101,42 +87,42 @@ int main(int argc, char** argv){
     float alpha = 1.0;
     float beta = 0;
     cudaEvent_t start, stop;
-    checkCudaErrors(cudaEventCreate(&start));
-    checkCudaErrors(cudaEventCreate(&stop));
-    checkCudaErrors(cudaEventSynchronize(start));
-    checkCudaErrors(cudaEventRecord(start));
+    CHECK_CUDA(cudaEventCreate(&start));
+    CHECK_CUDA(cudaEventCreate(&stop));
+    CHECK_CUDA(cudaEventSynchronize(start));
+    CHECK_CUDA(cudaEventRecord(start));
 
     for (int i = 0; i < nIter; i++){
         sgemmKernelV1<<<grid, block>>>(d_A, d_B, d_C, M, N, K, alpha, beta);
     }
 
-    checkCudaErrors(cudaEventRecord(stop));
-    checkCudaErrors(cudaEventSynchronize(stop));
-    checkCudaErrors(cudaEventElapsedTime(&msec, start, stop));
+    CHECK_CUDA(cudaEventRecord(stop));
+    CHECK_CUDA(cudaEventSynchronize(stop));
+    CHECK_CUDA(cudaEventElapsedTime(&msec, start, stop));
     printf("Elapsed time (My SGEMM): %.2f ms / %.4f giga flops\n", msec, flop * 1e-9f / (msec * 1e-3f / nIter));
 
-    checkCudaErrors(cudaMemcpy(h_C, d_C, bytes_C, cudaMemcpyDeviceToHost));
+    CHECK_CUDA(cudaMemcpy(h_C, d_C, bytes_C, cudaMemcpyDeviceToHost));
 
     // cublas
     cublasHandle_t blas_handle;
     cublasCreate(&blas_handle);
     alpha = 1.0;
     beta = 0;
-    checkCudaErrors(cudaMemcpy( d_C, h_C, bytes_C, cudaMemcpyHostToDevice));
-    checkCudaErrors(cudaEventSynchronize(start));
-    checkCudaErrors(cudaEventRecord(start));
+    CHECK_CUDA(cudaMemcpy( d_C, h_C, bytes_C, cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaEventSynchronize(start));
+    CHECK_CUDA(cudaEventRecord(start));
     for (int run = 0 ; run < nIter; run ++ ) {
         cublasSgemm (blas_handle, CUBLAS_OP_T, CUBLAS_OP_T, 
             M, N, K, &alpha, 
             d_A, K, d_B, N, &beta, d_C, M
         );
     }
-    checkCudaErrors(cudaEventRecord(stop));
-    checkCudaErrors(cudaEventSynchronize(stop));
-    checkCudaErrors(cudaEventElapsedTime(&msec, start, stop));
+    CHECK_CUDA(cudaEventRecord(stop));
+    CHECK_CUDA(cudaEventSynchronize(stop));
+    CHECK_CUDA(cudaEventElapsedTime(&msec, start, stop));
     printf("Elapsed time (cuBLAS): %.2f ms / %.4f giga flops\n", msec, flop * 1e-9f / (msec * 1e-3f / nIter));
 
-    checkCudaErrors(cudaMemcpy(h_C_ref, d_C, bytes_C, cudaMemcpyDeviceToHost));
+    CHECK_CUDA(cudaMemcpy(h_C_ref, d_C, bytes_C, cudaMemcpyDeviceToHost));
 
     double eps = 1.e-6; 
     bool correct = true;

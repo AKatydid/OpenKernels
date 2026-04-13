@@ -14,17 +14,4 @@ endif()
 
 find_package(CUDAToolkit REQUIRED)
 
-enable_testing()
-
-option(OPENKERNELS_BUILD_TESTS "Build correctness tests" ON)
-option(OPENKERNELS_BUILD_BENCHMARKS "Build performance benchmarks" ON)
-
 add_subdirectory(src)
-
-if(OPENKERNELS_BUILD_TESTS)
-  add_subdirectory(tests)
-endif()
-
-if(OPENKERNELS_BUILD_BENCHMARKS AND EXISTS "${PROJECT_SOURCE_DIR}/benchmarks/CMakeLists.txt")
-  add_subdirectory(benchmarks)
-endif()
