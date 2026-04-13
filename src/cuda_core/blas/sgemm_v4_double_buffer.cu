@@ -119,14 +119,21 @@ __global__ void sgemmKernelV4(
 
 
 int main(int argc, char** argv){
-    if (argc != 4){
-        printf("Usage: %s <M> <N> <K>\n", argv[0]);
+    if (argc < 4 || argc > 6){
+        printf("Usage: %s <M> <N> <K> [warm_up] [test_iter]\n", argv[0]);
         return -1;
     }
 
     size_t M = atoll(argv[1]);
     size_t N = atoll(argv[2]);
     size_t K = atoll(argv[3]);
+    int warmup = (argc >= 5) ? atoi(argv[4]) : 10;
+    int nIter = (argc >= 6) ? atoi(argv[5]) : 200;
+
+    if (warmup < 0 || nIter <= 0) {
+        printf("warm_up must be >= 0 and test_iter must be > 0\n");
+        return -1;
+    }
 
     size_t bytes_A = sizeof(float) * M * K;
     size_t bytes_B = sizeof(float) * K * N;
@@ -154,8 +161,6 @@ int main(int argc, char** argv){
 
     float msec = 0;
     float flop = 2 * M * N * K;
-    int warmup = 10;
-    int nIter = 200;
     
     const int BM = 128;
     const int BN = 128;
@@ -166,11 +171,11 @@ int main(int argc, char** argv){
     dim3 grid = dim3((N + BN - 1) / BN, (M + BM - 1) / BM);
 
     // warmup
-    // for (int i = 0; i < warmup; i++){
-    //     float alpha = 1.0;
-    //     float beta = 0;
-    //     sgemmKernelV2<BM, BN, BK, TM, TN><<<grid, block>>>(d_A, d_B, d_C, M, N, K, alpha, beta);
-    // }
+    for (int i = 0; i < warmup; i++){
+        float alpha = 1.0;
+        float beta = 0;
+        sgemmKernelV4<BM, BN, BK, TM, TN><<<grid, block>>>(d_A, d_B, d_C, M, N, K, alpha, beta);
+    }
 
     float alpha = 1.0;
     float beta = 0;

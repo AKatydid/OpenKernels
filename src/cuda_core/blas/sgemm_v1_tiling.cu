@@ -34,16 +34,22 @@ __global__ void sgemmKernelV1(float* __restrict__ a, float* __restrict__ b, floa
     }
 }
 
-#ifndef OPENKERNELS_DISABLE_MAIN
 int main(int argc, char** argv){
-    if (argc != 4){
-        printf("Usage: %s <M> <N> <K>\n", argv[0]);
+    if (argc < 4 || argc > 6){
+        printf("Usage: %s <M> <N> <K> [warm_up] [test_iter]\n", argv[0]);
         return -1;
     }
 
     size_t M = atoll(argv[1]);
     size_t N = atoll(argv[2]);
     size_t K = atoll(argv[3]);
+    int warmup = (argc >= 5) ? atoi(argv[4]) : 10;
+    int nIter = (argc >= 6) ? atoi(argv[5]) : 200;
+
+    if (warmup < 0 || nIter <= 0) {
+        printf("warm_up must be >= 0 and test_iter must be > 0\n");
+        return -1;
+    }
 
     size_t bytes_A = sizeof(float) * M * K;
     size_t bytes_B = sizeof(float) * K * N;
@@ -71,8 +77,6 @@ int main(int argc, char** argv){
 
     float msec = 0;
     float flop = 2 * M * N * K;
-    int warmup = 10;
-    int nIter = 200;
     
     dim3 block(16, 16);
     dim3 grid((M + block.x - 1) / block.x, (N + block.y - 1) / block.y);
@@ -154,4 +158,3 @@ int main(int argc, char** argv){
 
     return 0;
 }
-#endif  // OPENKERNELS_DISABLE_MAIN

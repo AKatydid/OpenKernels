@@ -10,67 +10,63 @@ OpenKernels/
 ├── README.md
 ├── LICENSE
 ├── include/
-│   └── openkernels/
-│       ├── common_utils.cuh
-│       └── kernels.h
+│   └── cuda_core/
+│       └── common_utils.cuh
 ├── src/
 │   ├── CMakeLists.txt
-│   ├── activation/
-│   │   ├── gelu.cu
-│   │   └── relu.cu
-│   ├── normalization/
-│   │   ├── rms_norm.cu
-│   │   └── softmax.cu
-│   ├── blas/
-│   │   ├── sgemv.cu
-│   │   ├── sgemm_naive.cu
-│   │   ├── sgemm_v1_tiling.cu
-│   │   ├── sgemm_v2_vectorize.cu
-│   │   ├── sgemm_v3_swizzle.cu
-│   │   └── sgemm_v4_double_buffer.cu
-│   └── scan/
-│       └── cumsum.cu
-├── tests/
-│   ├── CMakeLists.txt
 │   ├── cuda_core/
-│   │   ├── activation/
-│   │   ├── blas/
-│   │   ├── normalization/
-│   │   └── scan/
-│   ├── include/
-│   └── python/
+│   │   ├── activation/         # ReLu, GELU
+│   │   ├── blas/               # SGEMM, SGEMBV
+│   │   ├── normalization/      # Softmax, BatchNorm
+│   │   └── scan/               # Cumsum
+│   └── tensor_core/
 ├── scripts/
 │   ├── build.sh
-│   └── run_tests.py
-└── tensor_core/
+│   └── make_clean.sh
+└── build/
 ```
 
 ## Build
+
+The build command compiles all files containing a `main` function in `src/cuda_core` and `src/tensor_core`.
 
 ```bash
 ./scripts/build.sh
 ```
 
-Or manually:
+Clean build artifacts.
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j
+./scripts/make_clean.sh
 ```
 
 ## Run
 
 ```bash
-# correctness
-./build/tests/test_softmax --verify
-./build/tests/test_sgemm --verify 256 256 256
+# Available SGEMM executables (generated from src/cuda_core/blas/*.cu with main)
+./build/src/sgemm_v1_tiling
+./build/src/sgemm_v2_vectorize
+./build/src/sgemm_v3_swizzle
+./build/src/sgemm_v4_double_buffer
+```
 
-# batch verify + benchmark
-python3 scripts/run_tests.py --build-dir build
+All SGEMM executables currently use the same CLI format:
+
+```bash
+./build/src/sgemm_v4_double_buffer <M> <N> <K> [warm_up] [test_iter]
+```
+
+- `warm_up` is optional, default: `10`
+- `test_iter` is optional, default: `200`
+
+Example:
+
+```bash
+./build/src/sgemm_v4_double_buffer 4096 4096 4096
+./build/src/sgemm_v4_double_buffer 4096 4096 4096 20 500
 ```
 
 ## Notes
 
-- Public APIs for reusable kernels are declared in `include/openkernels/kernels.h`.
-- Shared CUDA helpers (`CUDA_CHECK`, `CudaTimer`, random helpers) are in `include/openkernels/common_utils.cuh`.
-- `bench_softmax.cu` is migrated from the previous `softmax_new.cu` standalone benchmark.
+- CMake scans `src/cuda_core/**/*.cu` and only builds files containing `main` as standalone executables.
+- Shared CUDA helpers are in `include/cuda_core/common_utils.cuh`.
