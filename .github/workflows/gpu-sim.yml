@@ -1,0 +1,74 @@
+name: CUDA tests (simulated H100)
+
+# Optional, non-required check. The hosted runners have no GPU, so this builds
+# the library and tests and runs ctest on a simulated NVIDIA H100
+# (https://github.com/pantheongpu/pantheonsim). A simulator cannot reproduce
+# hardware-specific behavior or timing, so it complements real-GPU testing and
+# does not replace it.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "src/**"
+      - "include/**"
+      - "tests/**"
+      - "CMakeLists.txt"
+      - ".github/workflows/gpu-sim.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  cuda-sim:
+    name: CUDA 13.0, simulated H100
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+
+      - name: Set up the simulated GPU and CUDA toolkit
+        uses: pantheongpu/setup-pantheonsim@656f502ef4782d94d34d8ddd368e333960609639 # v0.1.8
+        with:
+          gpu: nvidia/h100
+          cuda-toolkit: "13.0"
+
+      # The simulator runs PTX only (90-virtual) and needs a shared CUDA runtime.
+      - name: Configure project
+        run: |
+          cmake -B build -S . \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_CUDA_COMPILER=/usr/local/cuda-13.0/bin/nvcc \
+                -DCUDAToolkit_ROOT=/usr/local/cuda-13.0 \
+                -DCMAKE_CUDA_ARCHITECTURES=90-virtual \
+                -DCMAKE_CUDA_RUNTIME_LIBRARY=Shared \
+                -DOPENKERNELS_BUILD_BENCHMARKS=OFF
+
+      - name: Build project
+        run: cmake --build build -j3
+
+      # Each test compares the GPU result with a CPU reference and exits
+      # non-zero on a mismatch or on any CUDA error (including no device).
+      - name: Run tests
+        working-directory: build
+        shell: bash
+        run: vgpu run ctest -V --no-tests=error | tee ctest.log
+
+      # Guard: all 7 tests must have really run on the simulated device.
+      - name: Check that every test ran on the simulated GPU
+        working-directory: build
+        shell: bash
+        run: |
+          grep -q "100% tests passed, 0 tests failed out of 7" ctest.log
+          if grep -Eq "Not Run|Skipped|Disabled" ctest.log; then
+            echo "A test was skipped or not run"; exit 1
+          fi
+          n=$(grep -c "VERIFY .* PASS$" ctest.log || true)
+          [ "$n" -eq 7 ] || { echo "expected 7 VERIFY PASS lines, got $n"; exit 1; }
